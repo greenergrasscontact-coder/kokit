@@ -1,0 +1,18 @@
+{
+  "name": "KO KIT — PO-33 sample helper",
+  "short_name": "KO KIT",
+  "description": "Chop, tune, layer and export 16-slot sample kits for the Teenage Engineering PO-33 K.O!",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0B120E",
+  "theme_color": "#0B120E",
+  "categories": ["music", "utilities"],
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
