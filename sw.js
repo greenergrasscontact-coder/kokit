@@ -1,6 +1,6 @@
 /* KO KIT service worker.
    Bump CACHE when you change index.html, or installed copies keep serving the old build. */
-const CACHE = 'kokit-v1';
+const CACHE = 'kokit-v2';
 
 const ASSETS = [
   './',

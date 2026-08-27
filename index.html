@@ -225,6 +225,26 @@ input[type=checkbox]:checked{background:var(--lcd);border-color:var(--lcd)}
 .tbar .tick{position:absolute;top:0;bottom:0;width:1px;background:rgba(230,237,228,.09)}
 .tcents{font-size:11px;letter-spacing:.14em;color:var(--dim);margin-top:6px;text-transform:uppercase}
 
+/* ---------- input meter / recorder ---------- */
+.meter{position:relative;height:24px;border:1px solid var(--edge);border-radius:var(--r);
+  background:var(--pcb);overflow:hidden;margin-top:10px}
+.meter .mfill{position:absolute;left:0;top:0;bottom:0;width:0%;
+  background:linear-gradient(90deg,var(--lcd) 0%,var(--lcd) 62%,var(--copper) 84%,var(--flag) 100%);
+  background-size:calc(100%*var(--full,1)) 100%}
+.meter .mpk{position:absolute;top:0;bottom:0;width:2px;background:var(--silk);left:0;opacity:.85}
+.meter .tick{position:absolute;top:0;bottom:0;width:1px;background:rgba(230,237,228,.14)}
+.meter .mclip{position:absolute;right:6px;top:5px;font-size:9px;letter-spacing:.16em;
+  font-weight:700;color:var(--flag);opacity:0}
+.meter .mclip.on{opacity:1}
+.rechead{display:flex;align-items:baseline;justify-content:space-between;margin-top:12px;gap:10px}
+.rectime{font-size:30px;font-weight:700;letter-spacing:-.02em;line-height:1}
+.recdot{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--dimmer);
+  margin-right:8px;vertical-align:middle}
+.recdot.arm{background:var(--copper)}
+.recdot.live{background:var(--flag)}
+.takebox{border:1px solid var(--edge2);border-radius:var(--r);background:var(--mask);padding:10px;margin-top:8px}
+.takebox .tt{font-size:12px;font-weight:700;margin-bottom:2px}
+
 /* ---------- send mode overlay ---------- */
 .overlay{position:fixed;inset:0;background:rgba(11,18,14,.97);z-index:50;display:none;
   flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;gap:16px}
@@ -299,6 +319,7 @@ input[type=checkbox]:checked{background:var(--lcd);border-color:var(--lcd)}
   <div class="tabs" id="tabs">
     <button class="tab on" data-p="edit">Edit</button>
     <button class="tab" data-p="layers">Layers</button>
+    <button class="tab" data-p="rec">Rec</button>
     <button class="tab" data-p="chop">Chop</button>
     <button class="tab" data-p="tuner">Tuner</button>
     <button class="tab" data-p="out">Export</button>
@@ -410,6 +431,49 @@ input[type=checkbox]:checked{background:var(--lcd);border-color:var(--lcd)}
     <div class="row" style="margin-top:8px">
       <button class="btn grow" id="btnLoad2">+ Load audio</button>
     </div>
+  </section>
+
+  <!-- ---------- REC ---------- -->
+  <section class="panel" data-p="rec">
+    <div class="eyebrow">Input</div>
+    <div class="hint">A cable from the PO's output into a line or interface input beats the built-in mic by a wide margin. The PO runs hot, so back its volume off rather than letting the input clip.</div>
+    <select id="recDev" style="margin-top:8px"></select>
+    <div class="row" style="margin-top:8px">
+      <button class="btn grow go" id="btnRecOpen">Open input</button>
+      <button class="btn" id="btnRecDevs">Rescan</button>
+    </div>
+
+    <div class="meter" id="meter">
+      <div class="mfill" id="mfill"></div>
+      <div class="mpk" id="mpk"></div>
+      <div class="mclip" id="mclip">CLIP</div>
+    </div>
+    <div class="rechead">
+      <div class="rectime"><span class="recdot" id="recDot"></span><span id="recTime">0.0</span><span style="font-size:13px"> s</span></div>
+      <div class="hint" style="text-align:right" id="recRead">input closed</div>
+    </div>
+
+    <div class="row" style="margin-top:10px">
+      <button class="btn go grow" id="btnRec">● Record</button>
+      <button class="btn" id="btnRecStop">■ Stop</button>
+    </div>
+
+    <div class="eyebrow">Behaviour</div>
+    <label class="chk"><input type="checkbox" id="recAuto" checked><span>Wait for sound, then start — arm it, hit play on the PO, no dead air at the top</span></label>
+    <label class="chk"><input type="checkbox" id="recAutoStop" checked><span>Stop after two seconds of silence</span></label>
+    <label class="chk"><input type="checkbox" id="recMon"><span>Monitor input — headphones only, speakers will howl</span></label>
+    <div class="field">
+      <div class="lbl"><span>Threshold</span><b id="recThrV">−42 dB</b></div>
+      <input type="range" id="recThr" min="-72" max="-12" step="1" value="-42">
+    </div>
+    <div class="field">
+      <div class="lbl"><span>Max length</span><b id="recMaxV">30 s</b></div>
+      <input type="range" id="recMax" min="1" max="120" step="1" value="30">
+    </div>
+
+    <div class="eyebrow">Last take</div>
+    <div id="takeBox"></div>
+    <div class="hint" style="margin-top:8px">Takes join the source list like any loaded file. Record a whole pattern off the PO, send it to Chop, slice it, and it comes back as 16 slots.</div>
   </section>
 
   <!-- ---------- CHOP ---------- -->
@@ -857,7 +921,7 @@ function findOnsets(d, sr, sensitivity, minMs) {
 }
 
 /* ---------------- WAV encode ---------------- */
-function encodeWav(chans, sr) {
+function encodeWavAb(chans, sr) {
   const nCh = chans.length, len = chans[0].length;
   const bytes = len * nCh * 2;
   const ab = new ArrayBuffer(44 + bytes);
@@ -876,8 +940,9 @@ function encodeWav(chans, sr) {
       o += 2;
     }
   }
-  return new Blob([ab], { type: 'audio/wav' });
+  return ab;
 }
+function encodeWav(chans, sr) { return new Blob([encodeWavAb(chans, sr)], { type: 'audio/wav' }); }
 
 /* ---------------- minimal ZIP (stored, no compression) ---------------- */
 const CRC_TABLE = (() => {
@@ -1003,7 +1068,7 @@ function renderPad(i) {
     if (l.mute) continue;
     const s = state.sources[l.srcId];
     if (!s) continue;
-    const seg = sliceData(s.mono, l.start * sr, l.end * sr);
+    const seg = sliceData(s.mono, l.start * s.sr, l.end * s.sr);
     if (!seg.length) continue;
     const off = Math.max(0, Math.round((l.offset || 0) / 1000 * sr));
     applyGain(seg, dbToGain(l.gain || 0));
@@ -1791,11 +1856,29 @@ function wireChop() {
    ============================================================ */
 const tuner = { stream: null, analyser: null, buf: null, raf: 0, on: false, tone: null };
 
+/* One microphone stream shared by the tuner and the recorder — asking twice
+   would make the browser hand back two independent captures. */
+const mic = { stream: null, deviceId: null };
+
+async function micStream(deviceId) {
+  if (mic.stream && mic.stream.active && (!deviceId || deviceId === mic.deviceId)) return mic.stream;
+  if (mic.stream) { mic.stream.getTracks().forEach(t => t.stop()); mic.stream = null; }
+  const con = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 };
+  if (deviceId) con.deviceId = { exact: deviceId };
+  mic.stream = await navigator.mediaDevices.getUserMedia({ audio: con });
+  mic.deviceId = deviceId || null;
+  return mic.stream;
+}
+
+function releaseMic() {
+  if (tuner.on || rec.open) return;
+  if (mic.stream) mic.stream.getTracks().forEach(t => t.stop());
+  mic.stream = null;
+}
+
 async function startMic() {
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
-    });
+    const stream = await micStream(($('#recDev') && $('#recDev').value) || null);
     const c = audio();
     const src = c.createMediaStreamSource(stream);
     const an = c.createAnalyser();
@@ -1815,8 +1898,8 @@ async function startMic() {
 function stopMic() {
   tuner.on = false;
   cancelAnimationFrame(tuner.raf);
-  if (tuner.stream) tuner.stream.getTracks().forEach(t => t.stop());
   tuner.stream = null;
+  releaseMic();
   $('#btnMic').textContent = 'Start mic';
   $('#btnMic').classList.add('go');
   $('#tNote').textContent = '—';
@@ -2029,6 +2112,266 @@ function syncSettingsUi() {
 }
 
 /* ============================================================
+   RECORDER
+   ============================================================ */
+const rec = {
+  open: false, capturing: false, armed: false,
+  chunks: [], frames: 0, node: null, srcNode: null, an: null, buf: null,
+  mon: null, raf: 0, peak: 0, hold: 0, holdAt: 0, clip: false,
+  t0: 0, quietSince: 0, lastTake: null, seq: 0, worklet: false
+};
+
+const CAP_WORKLET = `
+class Cap extends AudioWorkletProcessor {
+  constructor(){ super(); this.buf = new Float32Array(4096); this.n = 0; }
+  process(inputs){
+    const ch = inputs[0] && inputs[0][0];
+    if (ch) {
+      for (let i = 0; i < ch.length; i++) {
+        this.buf[this.n++] = ch[i];
+        if (this.n === this.buf.length) { this.port.postMessage(this.buf.slice(0)); this.n = 0; }
+      }
+    }
+    return true;
+  }
+}
+registerProcessor('cap', Cap);
+`;
+
+async function recOpen() {
+  try {
+    const stream = await micStream(($('#recDev').value) || null);
+    const c = audio();
+    rec.srcNode = c.createMediaStreamSource(stream);
+    rec.an = c.createAnalyser();
+    rec.an.fftSize = 2048;
+    rec.buf = new Float32Array(rec.an.fftSize);
+    rec.srcNode.connect(rec.an);
+
+    // Capture raw float samples. AudioWorklet where available, ScriptProcessor
+    // as the fallback — either way this is uncompressed, unlike MediaRecorder.
+    const sink = c.createGain();
+    sink.gain.value = 0;
+    sink.connect(c.destination);
+    let node = null;
+    try {
+      if (c.audioWorklet) {
+        const url = URL.createObjectURL(new Blob([CAP_WORKLET], { type: 'text/javascript' }));
+        await c.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
+        node = new AudioWorkletNode(c, 'cap', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1 });
+        node.port.onmessage = e => { if (rec.capturing) { rec.chunks.push(e.data); rec.frames += e.data.length; } };
+        rec.worklet = true;
+      }
+    } catch (err) { node = null; rec.worklet = false; }
+    if (!node) {
+      node = c.createScriptProcessor(4096, 1, 1);
+      node.onaudioprocess = e => {
+        if (!rec.capturing) return;
+        const d = e.inputBuffer.getChannelData(0).slice(0);
+        rec.chunks.push(d); rec.frames += d.length;
+      };
+    }
+    rec.srcNode.connect(node);
+    node.connect(sink);
+    rec.node = node;
+
+    rec.mon = c.createGain();
+    rec.mon.gain.value = $('#recMon').checked ? 1 : 0;
+    rec.srcNode.connect(rec.mon);
+    rec.mon.connect(c.destination);
+
+    rec.open = true;
+    $('#btnRecOpen').textContent = 'Close input';
+    $('#btnRecOpen').classList.remove('go');
+    listInputs();
+    meterLoop();
+    toast('input open · ' + (rec.worklet ? 'worklet' : 'fallback') + ' capture');
+  } catch (e) {
+    toast('mic blocked — check permissions', true);
+  }
+}
+
+function recClose() {
+  recStop(true);
+  cancelAnimationFrame(rec.raf);
+  try { rec.srcNode && rec.srcNode.disconnect(); } catch (e) {}
+  try { rec.node && rec.node.disconnect(); } catch (e) {}
+  try { rec.mon && rec.mon.disconnect(); } catch (e) {}
+  rec.srcNode = rec.node = rec.mon = rec.an = null;
+  rec.open = false;
+  releaseMic();
+  $('#btnRecOpen').textContent = 'Open input';
+  $('#btnRecOpen').classList.add('go');
+  $('#recRead').textContent = 'input closed';
+  $('#mfill').style.width = '0%';
+  $('#mpk').style.left = '0%';
+  paintRecState();
+}
+
+function dbOf(v) { return 20 * Math.log10(Math.max(1e-6, v)); }
+
+function meterLoop() {
+  if (!rec.open) return;
+  rec.an.getFloatTimeDomainData(rec.buf);
+  let pk = 0;
+  for (let i = 0; i < rec.buf.length; i++) { const a = Math.abs(rec.buf[i]); if (a > pk) pk = a; }
+  rec.peak = pk;
+  const now = performance.now();
+  if (pk >= rec.hold || now - rec.holdAt > 900) { rec.hold = pk; rec.holdAt = now; }
+  if (pk >= 0.999) { rec.clip = true; $('#mclip').classList.add('on'); setTimeout(() => $('#mclip').classList.remove('on'), 900); }
+
+  const pct = clamp((dbOf(pk) + 60) / 60 * 100, 0, 100);
+  const hpct = clamp((dbOf(rec.hold) + 60) / 60 * 100, 0, 100);
+  $('#mfill').style.width = pct + '%';
+  $('#mpk').style.left = hpct + '%';
+
+  const thr = Math.pow(10, (+$('#recThr').value) / 20);
+
+  if (rec.armed && !rec.capturing && pk > thr) recBegin();
+
+  if (rec.capturing) {
+    const el = rec.frames / audio().sampleRate;
+    $('#recTime').textContent = fmt(el, 1);
+    if (pk > thr) rec.quietSince = now;
+    if ($('#recAutoStop').checked && rec.quietSince && now - rec.quietSince > 2000 && el > 0.4) recStop();
+    else if (el >= +$('#recMax').value) { recStop(); toast('hit max length'); }
+  } else if (!rec.armed) {
+    let read = fmt(dbOf(pk), 1) + ' dBFS peak';
+    if (now % 400 < 40) {
+      const p = detectPitch(rec.buf, audio().sampleRate, state.a4);
+      if (p && p.clarity > 0.6) read += ' · reads as ' + p.name + p.octave;
+    }
+    $('#recRead').textContent = read;
+  }
+  rec.raf = requestAnimationFrame(meterLoop);
+}
+
+function paintRecState() {
+  const dot = $('#recDot');
+  dot.className = 'recdot' + (rec.capturing ? ' live' : rec.armed ? ' arm' : '');
+  $('#btnRec').textContent = rec.capturing ? '● Recording' : rec.armed ? '● Armed' : '● Record';
+  $('#btnRec').classList.toggle('on', rec.armed || rec.capturing);
+}
+
+function recArm() {
+  if (!rec.open) { toast('open the input first', true); return; }
+  if ($('#recAuto').checked) {
+    rec.armed = true;
+    rec.quietSince = 0;
+    $('#recRead').textContent = 'armed — waiting for sound';
+    $('#recTime').textContent = '0.0';
+    paintRecState();
+  } else recBegin();
+}
+
+function recBegin() {
+  rec.armed = false;
+  rec.capturing = true;
+  rec.chunks = [];
+  rec.frames = 0;
+  rec.t0 = performance.now();
+  rec.quietSince = performance.now();
+  $('#recRead').textContent = 'recording';
+  paintRecState();
+}
+
+function recStop(silent) {
+  const wasCapturing = rec.capturing;
+  rec.capturing = false;
+  rec.armed = false;
+  paintRecState();
+  if (!wasCapturing) return;
+
+  const sr = audio().sampleRate;
+  const data = new Float32Array(rec.frames);
+  let o = 0;
+  for (const c of rec.chunks) { data.set(c, o); o += c.length; }
+  rec.chunks = [];
+  if (data.length < sr * 0.05) { if (!silent) toast('take too short', true); return; }
+
+  const id = 's' + (++state.srcSeq);
+  const name = 'take ' + pad2(++rec.seq);
+  // Store it as WAV bytes so presets can embed a take the same way they embed a file.
+  const bytes = encodeWavAb([data], sr);
+  state.sources[id] = { id, name: name + '.wav', mono: data, sr, dur: data.length / sr, bytes, mime: 'audio/wav' };
+  rec.lastTake = id;
+  refreshSources();
+  paintTake();
+  if (!silent) toast(name + ' · ' + fmt(data.length / sr, 2) + 's');
+}
+
+function paintTake() {
+  const box = $('#takeBox');
+  const s = state.sources[rec.lastTake];
+  if (!s) { box.innerHTML = '<div class="empty">Nothing recorded yet.</div>'; return; }
+  const pk = peakOf(s.mono);
+  box.innerHTML = '<div class="takebox"><div class="tt">' + esc(s.name) + '</div>' +
+    '<div class="hint">' + fmt(s.dur, 2) + 's · peak ' + fmt(dbOf(pk), 1) + ' dBFS' +
+    (pk >= 0.999 ? ' <span class="warn">· clipped</span>' : '') + '</div>' +
+    '<div class="row tight" style="margin-top:8px">' +
+    '<button class="btn sm" id="tkPlay">▶</button>' +
+    '<button class="btn sm cu" id="tkSlot">→ slot ' + pad2(state.sel + 1) + '</button>' +
+    '<button class="btn sm" id="tkChop">→ chop</button>' +
+    '<button class="btn sm" id="tkWav">WAV</button>' +
+    '<button class="btn sm danger" id="tkDel">×</button></div></div>';
+
+  $('#tkPlay').addEventListener('click', () => { stopAll(); playData(s.mono, s.sr); });
+  $('#tkSlot').addEventListener('click', () => {
+    assignSource(state.sel, s.id, 0, defaultEnd(s));
+    selectPad(state.sel);
+    toast('→ slot ' + pad2(state.sel + 1));
+  });
+  $('#tkChop').addEventListener('click', () => {
+    state.chopSrc = s.id; state.slices = [];
+    refreshChopSrc(); renderSliceList();
+    $$('#tabs .tab').forEach(x => x.classList.toggle('on', x.dataset.p === 'chop'));
+    $$('.panel').forEach(p => p.classList.toggle('on', p.dataset.p === 'chop'));
+    drawChop();
+  });
+  $('#tkWav').addEventListener('click', () => {
+    download(encodeWav(state.settings.ch === 1 ? [s.mono] : [s.mono, s.mono.slice()], s.sr), safeName(s.name) + '.wav');
+  });
+  $('#tkDel').addEventListener('click', () => {
+    delete state.sources[s.id];
+    state.pads.forEach(p => { p.layers = p.layers.filter(l => l.srcId !== s.id); p._cache = null; p._sig = ''; });
+    rec.lastTake = null;
+    refreshSources(); refreshGrid(); updateEdit(); paintTake();
+  });
+}
+
+async function listInputs() {
+  try {
+    const devs = await navigator.mediaDevices.enumerateDevices();
+    const ins = devs.filter(d => d.kind === 'audioinput');
+    const sel = $('#recDev');
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">default input</option>' +
+      ins.map((d, i) => '<option value="' + d.deviceId + '">' + esc(d.label || ('input ' + (i + 1))) + '</option>').join('');
+    if (cur) sel.value = cur;
+  } catch (e) {}
+}
+
+function wireRec() {
+  $('#btnRecOpen').addEventListener('click', () => rec.open ? recClose() : recOpen());
+  $('#btnRecDevs').addEventListener('click', async () => {
+    await listInputs();
+    toast('inputs rescanned');
+  });
+  $('#recDev').addEventListener('change', async () => {
+    if (rec.open) { recClose(); await recOpen(); }
+  });
+  $('#btnRec').addEventListener('click', () => rec.capturing ? recStop() : recArm());
+  $('#btnRecStop').addEventListener('click', () => { rec.armed = false; recStop(); paintRecState(); });
+  $('#recMon').addEventListener('change', e => { if (rec.mon) rec.mon.gain.value = e.target.checked ? 1 : 0; });
+  bindSlider('#recThr', '#recThrV', () => {}, v => (v > 0 ? '+' : '\u2212') + Math.abs(v) + ' dB');
+  bindSlider('#recMax', '#recMaxV', () => {}, v => v + ' s');
+  listInputs();
+  paintTake();
+  paintRecState();
+}
+
+/* ============================================================
    GUIDED LOAD
    ============================================================ */
 const guide = { queue: [], pos: 0, phase: 'idle', timer: null };
@@ -2128,6 +2471,7 @@ function wireShell() {
     $$('.panel').forEach(p => p.classList.toggle('on', p.dataset.p === t.dataset.p));
     if (t.dataset.p === 'edit') drawWave();
     if (t.dataset.p === 'chop') drawChop();
+    if (t.dataset.p === 'rec') { paintTake(); paintRecState(); }
   }));
 
   $('#btnLoad').addEventListener('click', () => $('#fileIn').click());
@@ -2164,9 +2508,7 @@ function wireShell() {
     rt = setTimeout(() => { drawWave(); drawChop(); }, 120);
   });
 
-  // Runtime fallback manifest, for when the file is opened on its own with no
-  // manifest.webmanifest beside it. A real served manifest always wins.
-  if (document.querySelector('link[rel="manifest"]')) return;
+  // inline manifest so Add to Home Screen behaves when this is served over http(s)
   try {
     const mf = {
       name: 'KO KIT', short_name: 'KO KIT', display: 'standalone',
@@ -2205,7 +2547,7 @@ function boot() {
   $('#chopStart').innerHTML = state.pads.map((p, i) =>
     '<option value="' + i + '"' + (i === 8 ? ' selected' : '') + '>from slot ' + pad2(i + 1) +
     (isMelodic(i) ? ' (melodic)' : ' (drum)') + '</option>').join('');
-  wireShell(); wireEdit(); wireLayers(); wireChop(); wireTuner(); wireExport(); wireGuided();
+  wireShell(); wireEdit(); wireLayers(); wireRec(); wireChop(); wireTuner(); wireExport(); wireGuided();
   setupWaveDrag();
   syncSettingsUi();
   refreshSources();
