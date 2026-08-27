@@ -443,6 +443,15 @@ input[type=checkbox]:checked{background:var(--lcd);border-color:var(--lcd)}
       <button class="btn" id="btnRecDevs">Rescan</button>
     </div>
 
+    <div class="field">
+      <div class="lbl"><span>Interface channel</span><b id="recChInfo">—</b></div>
+      <div class="seg" id="recCh">
+        <button class="on" data-c="0">Input 1</button>
+        <button data-c="1">Input 2</button>
+        <button data-c="both">Sum</button>
+      </div>
+    </div>
+
     <div class="meter" id="meter">
       <div class="mfill" id="mfill"></div>
       <div class="mpk" id="mpk"></div>
@@ -480,7 +489,7 @@ input[type=checkbox]:checked{background:var(--lcd);border-color:var(--lcd)}
   <section class="panel" data-p="chop">
     <div class="eyebrow">Source</div>
     <select id="chopSrc"></select>
-    <div class="wavebox" id="chopBox" style="height:120px"><canvas id="chopWave"></canvas></div>
+    <div class="wavebox" id="chopBox" style="height:140px"><canvas id="chopWave"></canvas><div class="playhead" id="chopPh"></div></div>
     <div class="hint" id="chopRead" style="margin-top:6px">—</div>
 
     <div class="eyebrow">Method</div>
@@ -488,6 +497,7 @@ input[type=checkbox]:checked{background:var(--lcd);border-color:var(--lcd)}
       <button class="on" data-m="transient">Transients</button>
       <button data-m="equal">Equal</button>
       <button data-m="beats">Beats</button>
+      <button data-m="manual">Manual</button>
     </div>
 
     <div id="chopTransient">
@@ -526,6 +536,16 @@ input[type=checkbox]:checked{background:var(--lcd);border-color:var(--lcd)}
         </div>
       </div>
       <button class="btn sm wide" id="btnTapTempo" style="margin-top:8px">Tap tempo</button>
+    </div>
+
+    <div id="chopManual" hidden>
+      <div class="hint">Tap the waveform to drop a marker. Drag any marker to move it — including ones the other methods found. The × in the list below removes one.</div>
+      <div class="row tight" style="margin-top:8px">
+        <button class="btn sm" id="btnMarkPlay">▶ Play + mark</button>
+        <button class="btn sm go" id="btnMarkNow">Mark</button>
+        <button class="btn sm danger" id="btnMarkClear">Clear</button>
+      </div>
+      <label class="chk"><input type="checkbox" id="markSnap" checked><span>Snap new markers to the nearest transient</span></label>
     </div>
 
     <div class="row" style="margin-top:12px">
@@ -1025,8 +1045,9 @@ const state = {
   a4: 440,
   view: { from: 0, to: 1 },   // waveform zoom, fraction of layer-0 source
   slices: [],
+  marks: [],
   chopSrc: null,
-  settings: { lead: 1.2, tail: 0.4, gap: 1.5, ch: 2, lofiOn: false, lofiSr: 22050, lofiBit: 12 }
+  settings: { lead: 1.2, tail: 0.4, gap: 1.5, ch: 2, lofiOn: false, lofiSr: 22050, lofiBit: 12, recCh: '0' }
 };
 
 function newPad(i) {
@@ -1741,10 +1762,14 @@ function drawChop() {
     const hh = Math.max(1, mx * H * 0.9);
     g.fillRect(x, (H - hh) / 2, 1, hh);
   }
-  g.fillStyle = '#A8BE5C';
-  state.slices.forEach(sl => {
-    const x = (sl.start * s.sr) / d.length * W;
+  state.marks.forEach((t, i) => {
+    const x = t / s.dur * W;
+    g.fillStyle = i === chopDrag ? '#E6EDE4' : '#A8BE5C';
     g.fillRect(x, 0, 1.5, H);
+    g.fillRect(x - 4, 0, 9, 7);
+    g.fillStyle = '#0B120E';
+    g.font = '7px ui-monospace, monospace';
+    g.fillText(String(i + 1).slice(-1), x - 2, 6);
   });
   $('#chopRead').innerHTML = esc(s.name) + ' · ' + fmt(s.dur, 2) + 's · <b>' + state.slices.length + '</b> slice' +
     (state.slices.length === 1 ? '' : 's');
@@ -1755,6 +1780,12 @@ function computeSlices() {
   if (!s) { toast('load audio first', true); return; }
   const mode = $('#chopMode .on').dataset.m;
   const marks = [];
+  if (mode === 'manual') {
+    state.marks = [0];
+    marksToSlices(); renderSliceList(); drawChop();
+    toast('cleared — tap the waveform to add markers');
+    return;
+  }
   if (mode === 'transient') {
     const on = findOnsets(s.mono, s.sr, +$('#chSens').value, +$('#chMin').value);
     on.forEach(i => marks.push(i / s.sr));
@@ -1766,13 +1797,114 @@ function computeSlices() {
     const step = 60 / bpm * beats;
     for (let t = 0; t < s.dur - 0.01; t += step) marks.push(t);
   }
-  state.slices = marks.map((t, i) => ({
-    start: t,
-    end: i + 1 < marks.length ? marks[i + 1] : s.dur
-  })).filter(x => x.end - x.start > 0.005);
+  state.marks = marks;
+  marksToSlices();
   renderSliceList();
   drawChop();
   if (state.slices.length > NPADS) toast(state.slices.length + ' slices — only 16 will fit', true);
+}
+
+function marksToSlices() {
+  const s = state.sources[state.chopSrc];
+  if (!s) { state.slices = []; return; }
+  const m = Array.from(new Set(state.marks.map(t => clamp(t, 0, s.dur)))).sort((a, b) => a - b);
+  state.marks = m;
+  state.slices = m.map((t, i) => ({ start: t, end: i + 1 < m.length ? m[i + 1] : s.dur }))
+    .filter(x => x.end - x.start > 0.005);
+}
+
+/* Cached onset positions, so snapping a dragged marker doesn't re-analyse
+   the whole file on every pointer move. */
+function onsetsOf(s) {
+  if (!s._onsets) s._onsets = findOnsets(s.mono, s.sr, 60, 40).map(i => i / s.sr);
+  return s._onsets;
+}
+
+function snapMark(t) {
+  const s = state.sources[state.chopSrc];
+  if (!s || !$('#markSnap').checked) return t;
+  let best = t, bd = 0.06;
+  for (const o of onsetsOf(s)) {
+    const d = Math.abs(o - t);
+    if (d < bd) { bd = d; best = o; }
+  }
+  return best;
+}
+
+function addMark(t) {
+  const s = state.sources[state.chopSrc];
+  if (!s) return -1;
+  const v = clamp(snapMark(t), 0, s.dur);
+  state.marks.push(v);
+  marksToSlices();
+  renderSliceList();
+  drawChop();
+  return state.marks.indexOf(v);
+}
+
+let chopDrag = null;
+
+function setupChopDrag() {
+  const box = $('#chopBox');
+  const tAt = e => {
+    const s = state.sources[state.chopSrc];
+    const r = box.getBoundingClientRect();
+    const x = clamp((e.clientX !== undefined ? e.clientX : 0) - r.left, 0, r.width);
+    return (x / r.width) * s.dur;
+  };
+  box.addEventListener('pointerdown', e => {
+    const s = state.sources[state.chopSrc];
+    if (!s) return;
+    const r = box.getBoundingClientRect();
+    const t = tAt(e);
+    const pxPerSec = r.width / s.dur;
+    // grab a nearby marker, otherwise drop a new one in manual mode
+    let near = -1, nd = 14 / pxPerSec;
+    state.marks.forEach((m, i) => { const d = Math.abs(m - t); if (d < nd) { nd = d; near = i; } });
+    const manual = $('#chopMode .on').dataset.m === 'manual';
+    if (near < 0) {
+      if (!manual) return;
+      near = addMark(t);
+      if (near < 0) return;
+    }
+    chopDrag = near;
+    box.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  box.addEventListener('pointermove', e => {
+    if (chopDrag === null) return;
+    const s = state.sources[state.chopSrc];
+    if (!s) return;
+    state.marks[chopDrag] = clamp(tAt(e), 0, s.dur);
+    marksToSlices();
+    drawChop();
+  });
+  const end = () => {
+    if (chopDrag === null) return;
+    chopDrag = null;
+    marksToSlices();
+    renderSliceList();
+    drawChop();
+  };
+  box.addEventListener('pointerup', end);
+  box.addEventListener('pointercancel', end);
+}
+
+let markPh = null;
+function markPlay() {
+  const s = state.sources[state.chopSrc];
+  if (!s) { toast('load audio first', true); return; }
+  stopAll();
+  clearInterval(markPh);
+  playData(s.mono, s.sr);
+  const t0 = performance.now();
+  const box = $('#chopBox'), W = box.clientWidth;
+  markPh = setInterval(() => {
+    const el = (performance.now() - t0) / 1000;
+    if (el > s.dur) { clearInterval(markPh); markPh = null; $('#chopPh').style.left = '-10px'; return; }
+    rec.markAt = el;
+    $('#chopPh').style.left = (el / s.dur * W) + 'px';
+  }, 30);
 }
 
 function renderSliceList() {
@@ -1790,20 +1922,34 @@ function renderSliceList() {
     playData(sliceData(s.mono, sl.start * s.sr, sl.end * s.sr), s.sr);
   }));
   $$('[data-sx]', wrap).forEach(b => b.addEventListener('click', () => {
-    state.slices.splice(+b.dataset.sx, 1);
-    renderSliceList(); drawChop();
+    const sl = state.slices[+b.dataset.sx];
+    state.marks = state.marks.filter(m => Math.abs(m - sl.start) > 1e-6);
+    marksToSlices(); renderSliceList(); drawChop();
   }));
 }
 
 function wireChop() {
-  $('#chopSrc').addEventListener('change', e => { state.chopSrc = e.target.value; state.slices = []; renderSliceList(); drawChop(); });
+  $('#chopSrc').addEventListener('change', e => {
+    state.chopSrc = e.target.value; state.slices = []; state.marks = [];
+    renderSliceList(); drawChop();
+  });
   $$('#chopMode button').forEach(b => b.addEventListener('click', () => {
     $$('#chopMode button').forEach(x => x.classList.remove('on'));
     b.classList.add('on');
     $('#chopTransient').hidden = b.dataset.m !== 'transient';
     $('#chopEqual').hidden = b.dataset.m !== 'equal';
     $('#chopBeats').hidden = b.dataset.m !== 'beats';
+    $('#chopManual').hidden = b.dataset.m !== 'manual';
+    $('#btnFindSlices').textContent = b.dataset.m === 'manual' ? 'Reset to one slice' : 'Find slices';
   }));
+  $('#btnMarkPlay').addEventListener('click', markPlay);
+  $('#btnMarkNow').addEventListener('click', () => {
+    if (rec.markAt === undefined || markPh === null) { toast('press play + mark first', true); return; }
+    addMark(rec.markAt);
+  });
+  $('#btnMarkClear').addEventListener('click', () => {
+    state.marks = []; marksToSlices(); renderSliceList(); drawChop();
+  });
   bindSlider('#chSens', '#chSensV', () => {}, v => String(v));
   bindSlider('#chMin', '#chMinV', () => {}, v => v + ' ms');
   bindSlider('#chN', '#chNV', () => {}, v => String(v));
@@ -1863,7 +2009,9 @@ const mic = { stream: null, deviceId: null };
 async function micStream(deviceId) {
   if (mic.stream && mic.stream.active && (!deviceId || deviceId === mic.deviceId)) return mic.stream;
   if (mic.stream) { mic.stream.getTracks().forEach(t => t.stop()); mic.stream = null; }
-  const con = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 };
+  // Ask for both channels — a 2-in interface with the source on input 2 is
+  // silent if the browser hands back a mono downmix of channel 0 only.
+  const con = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: { ideal: 2 } };
   if (deviceId) con.deviceId = { exact: deviceId };
   mic.stream = await navigator.mediaDevices.getUserMedia({ audio: con });
   mic.deviceId = deviceId || null;
@@ -2118,7 +2266,8 @@ const rec = {
   open: false, capturing: false, armed: false,
   chunks: [], frames: 0, node: null, srcNode: null, an: null, buf: null,
   mon: null, raf: 0, peak: 0, hold: 0, holdAt: 0, clip: false,
-  t0: 0, quietSince: 0, lastTake: null, seq: 0, worklet: false
+  t0: 0, quietSince: 0, lastTake: null, seq: 0, worklet: false,
+  split: null, pick: null, chSel: '0', chCount: 1
 };
 
 const CAP_WORKLET = `
@@ -2143,10 +2292,25 @@ async function recOpen() {
     const stream = await micStream(($('#recDev').value) || null);
     const c = audio();
     rec.srcNode = c.createMediaStreamSource(stream);
+
+    const tr = stream.getAudioTracks()[0];
+    const st = (tr && tr.getSettings) ? tr.getSettings() : {};
+    rec.chCount = st.channelCount || rec.srcNode.channelCount || 1;
+
+    // Split the interface's channels apart, then pick one (or sum) into a
+    // single mono path that feeds the meter, the capture node and monitoring.
+    rec.split = c.createChannelSplitter(2);
+    rec.pick = c.createGain();
+    rec.pick.channelCount = 1;
+    rec.pick.channelCountMode = 'explicit';
+    rec.pick.channelInterpretation = 'discrete';
+    rec.srcNode.connect(rec.split);
+    routeInput();
+
     rec.an = c.createAnalyser();
     rec.an.fftSize = 2048;
     rec.buf = new Float32Array(rec.an.fftSize);
-    rec.srcNode.connect(rec.an);
+    rec.pick.connect(rec.an);
 
     // Capture raw float samples. AudioWorklet where available, ScriptProcessor
     // as the fallback — either way this is uncompressed, unlike MediaRecorder.
@@ -2159,7 +2323,10 @@ async function recOpen() {
         const url = URL.createObjectURL(new Blob([CAP_WORKLET], { type: 'text/javascript' }));
         await c.audioWorklet.addModule(url);
         URL.revokeObjectURL(url);
-        node = new AudioWorkletNode(c, 'cap', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1 });
+        node = new AudioWorkletNode(c, 'cap', {
+          numberOfInputs: 1, numberOfOutputs: 1,
+          channelCount: 1, channelCountMode: 'explicit', channelInterpretation: 'discrete'
+        });
         node.port.onmessage = e => { if (rec.capturing) { rec.chunks.push(e.data); rec.frames += e.data.length; } };
         rec.worklet = true;
       }
@@ -2172,16 +2339,19 @@ async function recOpen() {
         rec.chunks.push(d); rec.frames += d.length;
       };
     }
-    rec.srcNode.connect(node);
+    rec.pick.connect(node);
     node.connect(sink);
     rec.node = node;
 
+    // Mono into the monitor bus, so it lands centred in both ears rather than
+    // hard left the way a raw 2-channel interface stream would.
     rec.mon = c.createGain();
     rec.mon.gain.value = $('#recMon').checked ? 1 : 0;
-    rec.srcNode.connect(rec.mon);
+    rec.pick.connect(rec.mon);
     rec.mon.connect(c.destination);
 
     rec.open = true;
+    paintChanInfo();
     $('#btnRecOpen').textContent = 'Close input';
     $('#btnRecOpen').classList.remove('go');
     listInputs();
@@ -2196,9 +2366,11 @@ function recClose() {
   recStop(true);
   cancelAnimationFrame(rec.raf);
   try { rec.srcNode && rec.srcNode.disconnect(); } catch (e) {}
+  try { rec.split && rec.split.disconnect(); } catch (e) {}
+  try { rec.pick && rec.pick.disconnect(); } catch (e) {}
   try { rec.node && rec.node.disconnect(); } catch (e) {}
   try { rec.mon && rec.mon.disconnect(); } catch (e) {}
-  rec.srcNode = rec.node = rec.mon = rec.an = null;
+  rec.srcNode = rec.split = rec.pick = rec.node = rec.mon = rec.an = null;
   rec.open = false;
   releaseMic();
   $('#btnRecOpen').textContent = 'Open input';
@@ -2207,6 +2379,30 @@ function recClose() {
   $('#mfill').style.width = '0%';
   $('#mpk').style.left = '0%';
   paintRecState();
+}
+
+function routeInput() {
+  if (!rec.split || !rec.pick) return;
+  try { rec.split.disconnect(); } catch (e) {}
+  if (rec.chSel === 'both') {
+    rec.split.connect(rec.pick, 0);
+    rec.split.connect(rec.pick, 1);
+    rec.pick.gain.value = 0.5;
+  } else {
+    rec.split.connect(rec.pick, rec.chSel === '1' ? 1 : 0);
+    rec.pick.gain.value = 1;
+  }
+}
+
+function paintChanInfo() {
+  const el = $('#recChInfo');
+  if (!el) return;
+  if (!rec.open) { el.textContent = '—'; return; }
+  const label = rec.chSel === 'both' ? 'summed' : 'input ' + (rec.chSel === '1' ? '2' : '1');
+  el.textContent = label + ' of ' + rec.chCount;
+  const warn = rec.chCount < 2 && rec.chSel !== '0';
+  el.style.color = warn ? 'var(--flag)' : '';
+  if (warn) $('#recRead').textContent = 'only 1 channel from this device — input 2 is silent';
 }
 
 function dbOf(v) { return 20 * Math.log10(Math.max(1e-6, v)); }
@@ -2323,7 +2519,7 @@ function paintTake() {
     toast('→ slot ' + pad2(state.sel + 1));
   });
   $('#tkChop').addEventListener('click', () => {
-    state.chopSrc = s.id; state.slices = [];
+    state.chopSrc = s.id; state.slices = []; state.marks = [];
     refreshChopSrc(); renderSliceList();
     $$('#tabs .tab').forEach(x => x.classList.toggle('on', x.dataset.p === 'chop'));
     $$('.panel').forEach(p => p.classList.toggle('on', p.dataset.p === 'chop'));
@@ -2364,11 +2560,21 @@ function wireRec() {
   $('#btnRec').addEventListener('click', () => rec.capturing ? recStop() : recArm());
   $('#btnRecStop').addEventListener('click', () => { rec.armed = false; recStop(); paintRecState(); });
   $('#recMon').addEventListener('change', e => { if (rec.mon) rec.mon.gain.value = e.target.checked ? 1 : 0; });
+  $$('#recCh button').forEach(b => b.addEventListener('click', () => {
+    $$('#recCh button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    rec.chSel = b.dataset.c;
+    state.settings.recCh = rec.chSel;
+    routeInput();
+    paintChanInfo();
+    rec.hold = 0;
+  }));
   bindSlider('#recThr', '#recThrV', () => {}, v => (v > 0 ? '+' : '\u2212') + Math.abs(v) + ' dB');
   bindSlider('#recMax', '#recMaxV', () => {}, v => v + ' s');
   listInputs();
   paintTake();
   paintRecState();
+  paintChanInfo();
 }
 
 /* ============================================================
@@ -2548,7 +2754,7 @@ function boot() {
     '<option value="' + i + '"' + (i === 8 ? ' selected' : '') + '>from slot ' + pad2(i + 1) +
     (isMelodic(i) ? ' (melodic)' : ' (drum)') + '</option>').join('');
   wireShell(); wireEdit(); wireLayers(); wireRec(); wireChop(); wireTuner(); wireExport(); wireGuided();
-  setupWaveDrag();
+  setupWaveDrag(); setupChopDrag();
   syncSettingsUi();
   refreshSources();
   refreshGrid();
